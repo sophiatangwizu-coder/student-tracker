@@ -48,10 +48,24 @@
     return d.activities.filter(a=>(!kind||a.kind===kind) && (!from||a.date>=from) && (!to||a.date<=to)).sort(order).flatMap(a=>{const r=record(d,a.id,sid);return r?[{a,r}]:[];});
   }
   const rate = r => r.status==='score' && Number.isFinite(r.score)?r.score:null;
+  const homeworkState = r => r.hwRevision==='pending'?'revision_pending':r.hwRevision==='done'?'revised':r.status;
+  const homeworkComplete = r => (r.status==='done'||r.status==='missing'&&r.submitted)&&r.hwRevision!=='pending';
+  function setHomeworkStatus(r,value,date) {
+    if(!['done','missing','exempt','revision_pending','revised'].includes(value))throw Error('无效的作业状态');
+    if(value==='revision_pending'||value==='revised'){
+      if(r.status==='missing'){r.submitted=true;r.submitDate ||= date;}
+      else {r.status='done';r.submitted=false;r.submitDate='';}
+      r.hwRevision=value==='revision_pending'?'pending':'done';
+      r.revisedDate=value==='revised'?(r.revisedDate||date):'';
+    }else{
+      r.status=value;r.hwRevision='none';r.revisedDate='';
+      r.submitted=false;r.submitDate='';
+    }
+  }
   function summary(d,sid,from='',to='') {
     const es=entries(d,sid,null,from,to), ds=es.filter(x=>x.a.kind==='dict'&&x.r.status!=='absent'), hs=es.filter(x=>x.a.kind==='hw'&&x.r.status!=='exempt');
     const qs=es.filter(x=>x.a.kind==='quiz'&&rate(x.r)!==null).map(x=>({...x,value:x.r.score/x.a.total*100}));
-    return {dict:ds.length?ds.reduce((sum,x)=>sum+({p:1,'p-':.5,f:0}[x.r.status]),0)/ds.length*100:null,dictCount:ds.length,hw:hs.length?hs.filter(x=>x.r.status==='done'||x.r.submitted).length/hs.length*100:null,missing:hs.filter(x=>x.r.status==='missing').length,submitted:hs.filter(x=>x.r.status==='missing'&&x.r.submitted).length,quizzes:qs};
+    return {dict:ds.length?ds.reduce((sum,x)=>sum+({p:1,'p-':.5,f:0}[x.r.status]),0)/ds.length*100:null,dictCount:ds.length,hw:hs.length?hs.filter(x=>homeworkComplete(x.r)).length/hs.length*100:null,missing:hs.filter(x=>x.r.status==='missing').length,submitted:hs.filter(x=>x.r.status==='missing'&&x.r.submitted).length,hwPending:hs.filter(x=>x.r.hwRevision==='pending').length,hwRevised:hs.filter(x=>x.r.hwRevision==='done').length,quizzes:qs};
   }
   function delta(d,a,r) {
     if(rate(r)===null) return null;
@@ -59,11 +73,12 @@
     return p?(r.score/a.total-p.r.score/p.a.total)*100:null;
   }
   function issues(d, classId='') {
-    const out={retake:[],correction:[],homework:[]};
+    const out={retake:[],correction:[],homework:[],homeworkRevision:[]};
     d.records.forEach(r=>{const a=d.activities.find(a=>a.id===r.activityId);if(!a||classId&&a.classId!==classId)return;
       if(a.kind==='dict'&&r.status==='f'&&r.retake!=='passed')out.retake.push({a,r});
       if(a.kind==='dict'&&r.status!=='absent'&&r.correction!=='correct')out.correction.push({a,r});
       if(a.kind==='hw'&&r.status==='missing'&&!r.submitted)out.homework.push({a,r});
+      if(a.kind==='hw'&&r.hwRevision==='pending')out.homeworkRevision.push({a,r});
     });return out;
   }
   function validateBackup(d) {
@@ -89,6 +104,9 @@
       const states={dict:['p','p-','f','absent'],quiz:['blank','absent','score'],hw:['done','missing','exempt']};
       if(!states[a.kind].includes(r.status)||typeof r.note!=='string'||!['correct','wrong','none'].includes(r.correction)||!['pending','failed','passed'].includes(r.retake)||typeof r.submitted!=='boolean'||![r.retakeDate,r.submitDate].every(v=>typeof v==='string'&&(!v||/^\d{4}-\d{2}-\d{2}$/.test(v))))throw Error('记录内容无效');
       if(a.kind==='quiz'&&r.status==='score'&&!(Number.isFinite(r.score)&&r.score>=0&&r.score<=a.total))throw Error('成绩超出范围');
+      if(r.hwRevision!==undefined&&(a.kind!=='hw'||!['none','pending','done'].includes(r.hwRevision)))throw Error('作业订正状态无效');
+      if(['pending','done'].includes(r.hwRevision)&&!(r.status==='done'||r.status==='missing'&&r.submitted))throw Error('待改或已改的作业必须已交');
+      if(r.revisedDate!==undefined&&(typeof r.revisedDate!=='string'||r.revisedDate&&!/^\d{4}-\d{2}-\d{2}$/.test(r.revisedDate)))throw Error('作业已改日期无效');
     }
     if(d.activities.some(a=>a.studentIds.some(s=>!pairs.has(a.id+'|'+s))))throw Error('备份缺少学生记录');
     if(d.images.some(x=>!rs.has(x.recordId)||typeof x.name!=='string'||!['good','improve'].includes(x.tag)||typeof x.data!=='string'||!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(x.data)))throw Error('图片数据无效');
@@ -107,6 +125,21 @@
     if(found.length!==1)throw Error(found.length?'同名或学号重复，请用唯一学号匹配':'找不到对应学生');
     return found[0];
   }
-  const api={empty,uid,order,record,previous,createActivity,entries,summary,delta,issues,validateBackup,matchStudent,parseGender,quizKey,quizGroup,linkQuiz,quizStats};
+  function copyListRecords(d,a,type) {
+    const students=new Map(d.students.map(s=>[s.id,s])),rows=d.records.filter(r=>r.activityId===a.id);
+    const compare=(x,y)=>{const s=students.get(x.studentId),t=students.get(y.studentId);return String(s.number||'').localeCompare(String(t.number||''),'zh',{numeric:true})||s.name.localeCompare(t.name,'zh')||s.id.localeCompare(t.id);};
+    if(type==='bottom5'&&a.kind==='quiz')return rows.filter(r=>r.status==='score'&&Number.isFinite(r.score)).sort((x,y)=>x.score-y.score||compare(x,y)).slice(0,5);
+    return rows.filter(r=>{
+      if(a.kind==='dict')return type==='failed'?r.status==='f':type==='retake'?r.status==='f'&&r.retake!=='passed':type==='correction'?r.status!=='absent'&&r.correction!=='correct':false;
+      if(a.kind==='hw')return type==='unsubmitted'?r.status==='missing'&&!r.submitted:['revision_pending','revised'].includes(type)&&homeworkState(r)===type;
+      return false;
+    }).sort(compare);
+  }
+  function copyStudentNames(d,a,rows) {
+    const students=new Map(d.students.map(s=>[s.id,s])),counts=new Map();
+    a.studentIds.forEach(id=>{const name=students.get(id).name;counts.set(name,(counts.get(name)||0)+1);});
+    return rows.map(r=>{const s=students.get(r.studentId);return counts.get(s.name)>1?`${s.name}（${s.number?'学号 '+s.number:'名单序号 '+(a.studentIds.indexOf(s.id)+1)}）`:s.name;});
+  }
+  const api={empty,uid,order,record,previous,createActivity,entries,summary,delta,issues,validateBackup,matchStudent,parseGender,quizKey,quizGroup,linkQuiz,quizStats,homeworkState,homeworkComplete,setHomeworkStatus,copyListRecords,copyStudentNames};
   if(typeof module!=='undefined')module.exports=api;root.Tracker=api;
 })(globalThis);

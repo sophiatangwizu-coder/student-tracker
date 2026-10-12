@@ -1,7 +1,7 @@
 /* Domain logic shared by the offline interface and regression tests. */
 (function (root) {
   const empty = () => ({version:1,settings:{appName:'紫笺'},classes:[],students:[],activities:[],records:[],images:[]});
-  const sectionNames = ['听力短对话','听力篇章','听力长对话','语法填空','小猫钓鱼','完形填空','阅读A','阅读B','阅读C','六选四','翻译','小作文','大作文'];
+  const sectionNames = ['听力短对话','听力篇章','听力长对话','听力总','语法填空','小猫钓鱼','完形填空','阅读A','阅读B','阅读C','阅读总','六选四','翻译','小作文','大作文'];
   const dictParticipated = r => ['p','p-','f'].includes(r.status);
   const uid = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const order = (a,b) => a.date.localeCompare(b.date) || a.created-b.created || a.id.localeCompare(b.id);
@@ -198,9 +198,10 @@
     if(found.length!==1)throw Error(found.length?'同名或学号重复，请用唯一学号匹配':'找不到对应学生');
     return found[0];
   }
-  function copyListRecords(d,a,type) {
+  function copyListRecords(d,a,type,section) {
     const students=new Map(d.students.map(s=>[s.id,s])),rows=d.records.filter(r=>r.activityId===a.id);
     const compare=(x,y)=>{const s=students.get(x.studentId),t=students.get(y.studentId);return String(s.number||'').localeCompare(String(t.number||''),'zh',{numeric:true})||s.name.localeCompare(t.name,'zh')||s.id.localeCompare(t.id);};
+    if(type==='sectionBottom3'&&a.kind==='quiz')return rows.filter(r=>contentScore(a,r,section)!==null).sort((x,y)=>contentScore(a,x,section)-contentScore(a,y,section)||compare(x,y)).slice(0,3);
     if(type==='bottom5'&&a.kind==='quiz')return rows.filter(r=>r.status==='score'&&Number.isFinite(r.score)).sort((x,y)=>x.score-y.score||compare(x,y)).slice(0,5);
     return rows.filter(r=>{
       if(a.kind==='dict')return type==='failed'?r.status==='f':type==='retake'?r.status==='f'&&r.retake!=='passed':type==='correction'?dictParticipated(r)&&r.correction!=='correct':false;

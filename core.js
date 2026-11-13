@@ -52,14 +52,14 @@
     return d.activities.filter(a=>(!kind||a.kind===kind) && (!from||a.date>=from) && (!to||a.date<=to)).sort(order).flatMap(a=>{const r=record(d,a.id,sid);return r?[{a,r}]:[];});
   }
   const rate = r => r.status==='score' && Number.isFinite(r.score)?r.score:null;
-  const homeworkState = r => r.hwRevision==='pending'?'revision_pending':r.hwRevision==='done'?'revised':r.status;
-  const homeworkComplete = r => (r.status==='done'||r.status==='missing'&&r.submitted)&&r.hwRevision!=='pending';
+  const homeworkState = r => r.hwRevision==='unrevised'?'revision_unrevised':r.hwRevision==='pending'?'revision_pending':r.hwRevision==='done'?'revised':r.status;
+  const homeworkComplete = r => (r.status==='done'||r.status==='missing'&&r.submitted)&&!['pending','unrevised'].includes(r.hwRevision);
   function setHomeworkStatus(r,value,date) {
-    if(!['done','missing','exempt','revision_pending','revised'].includes(value))throw Error('无效的作业状态');
-    if(value==='revision_pending'||value==='revised'){
+    if(!['done','missing','exempt','revision_pending','revision_unrevised','revised'].includes(value))throw Error('无效的作业状态');
+    if(['revision_pending','revision_unrevised','revised'].includes(value)){
       if(r.status==='missing'){r.submitted=true;r.submitDate ||= date;}
       else {r.status='done';r.submitted=false;r.submitDate='';}
-      r.hwRevision=value==='revision_pending'?'pending':'done';
+      r.hwRevision=value==='revision_unrevised'?'unrevised':value==='revision_pending'?'pending':'done';
       r.revisedDate=value==='revised'?(r.revisedDate||date):'';
     }else{
       r.status=value;r.hwRevision='none';r.revisedDate='';
@@ -69,7 +69,7 @@
   function summary(d,sid,from='',to='') {
     const es=entries(d,sid,null,from,to), ds=es.filter(x=>x.a.kind==='dict'&&dictParticipated(x.r)), hs=es.filter(x=>x.a.kind==='hw'&&x.r.status!=='exempt');
     const qs=es.filter(x=>x.a.kind==='quiz'&&rate(x.r)!==null).map(x=>({...x,value:x.r.score/x.a.total*100}));
-    return {dict:ds.length?ds.reduce((sum,x)=>sum+({p:1,'p-':.5,f:0}[x.r.status]),0)/ds.length*100:null,dictCount:ds.length,hw:hs.length?hs.filter(x=>homeworkComplete(x.r)).length/hs.length*100:null,missing:hs.filter(x=>x.r.status==='missing').length,submitted:hs.filter(x=>x.r.status==='missing'&&x.r.submitted).length,hwPending:hs.filter(x=>x.r.hwRevision==='pending').length,hwRevised:hs.filter(x=>x.r.hwRevision==='done').length,quizzes:qs};
+    return {dict:ds.length?ds.reduce((sum,x)=>sum+({p:1,'p-':.5,f:0}[x.r.status]),0)/ds.length*100:null,dictCount:ds.length,hw:hs.length?hs.filter(x=>homeworkComplete(x.r)).length/hs.length*100:null,missing:hs.filter(x=>x.r.status==='missing').length,submitted:hs.filter(x=>x.r.status==='missing'&&x.r.submitted).length,hwPending:hs.filter(x=>['pending','unrevised'].includes(x.r.hwRevision)).length,hwUnrevised:hs.filter(x=>x.r.hwRevision==='unrevised').length,hwRevised:hs.filter(x=>x.r.hwRevision==='done').length,quizzes:qs};
   }
   // Selection is a set of quiz group keys. Chronology uses the earliest class date.
   const groupDate = (d,a) => quizGroup(d,a)[0];
@@ -144,12 +144,14 @@
     return {eligible,points,series,content,metric,type,selectedKeys};
   }
   function issues(d, classId='') {
-    const out={retake:[],correction:[],homework:[],homeworkRevision:[]};
+    const out={retake:[],correction:[],homework:[],homeworkRevision:[],retakeNotArrived:[],homeworkUnrevised:[]};
     d.records.forEach(r=>{const a=d.activities.find(a=>a.id===r.activityId);if(!a||classId&&a.classId!==classId)return;
       if(a.kind==='dict'&&r.status==='f'&&r.retake!=='passed')out.retake.push({a,r});
       if(a.kind==='dict'&&dictParticipated(r)&&r.correction!=='correct')out.correction.push({a,r});
       if(a.kind==='hw'&&r.status==='missing'&&!r.submitted)out.homework.push({a,r});
-      if(a.kind==='hw'&&r.hwRevision==='pending')out.homeworkRevision.push({a,r});
+      if(a.kind==='hw'&&['pending','unrevised'].includes(r.hwRevision))out.homeworkRevision.push({a,r});
+      if(a.kind==='dict'&&r.status==='f'&&r.retake==='not_arrived')out.retakeNotArrived.push({a,r});
+      if(a.kind==='hw'&&r.hwRevision==='unrevised')out.homeworkUnrevised.push({a,r});
     });return out;
   }
   function validateBackup(d) {
@@ -174,11 +176,11 @@
     for(const r of d.records){const a=as.get(r.activityId),key=r.activityId+'|'+r.studentId;
       if(!a||!ss.has(r.studentId)||!a.studentIds.includes(r.studentId)||pairs.has(key))throw Error('记录关联无效或重复');pairs.add(key);
       const states={dict:['p','p-','f','absent','dict_exempt'],quiz:['blank','absent','score'],hw:['done','missing','exempt']};
-      if(!states[a.kind].includes(r.status)||typeof r.note!=='string'||!['correct','wrong','none'].includes(r.correction)||!['pending','failed','passed'].includes(r.retake)||typeof r.submitted!=='boolean'||![r.retakeDate,r.submitDate].every(v=>typeof v==='string'&&(!v||/^\d{4}-\d{2}-\d{2}$/.test(v))))throw Error('记录内容无效');
+      if(!states[a.kind].includes(r.status)||typeof r.note!=='string'||!['correct','wrong','none'].includes(r.correction)||!['pending','not_arrived','failed','passed'].includes(r.retake)||typeof r.submitted!=='boolean'||![r.retakeDate,r.submitDate].every(v=>typeof v==='string'&&(!v||/^\d{4}-\d{2}-\d{2}$/.test(v))))throw Error('记录内容无效');
       if(a.kind==='quiz'&&r.status==='score'&&!(Number.isFinite(r.score)&&r.score>=0&&r.score<=a.total))throw Error('成绩超出范围');
       if(r.sectionScores!==undefined){if(a.kind!=='quiz'||!r.sectionScores||typeof r.sectionScores!=='object'||Array.isArray(r.sectionScores))throw Error('分项成绩无效');for(const [name,v] of Object.entries(r.sectionScores))if(!Object.hasOwn(a.sections||{},name)||v!==null&&(!Number.isFinite(v)||v<0||v>a.sections[name]))throw Error('分项成绩超出范围或缺少满分配置');}
-      if(r.hwRevision!==undefined&&(a.kind!=='hw'||!['none','pending','done'].includes(r.hwRevision)))throw Error('作业订正状态无效');
-      if(['pending','done'].includes(r.hwRevision)&&!(r.status==='done'||r.status==='missing'&&r.submitted))throw Error('待改或已改的作业必须已交');
+      if(r.hwRevision!==undefined&&(a.kind!=='hw'||!['none','pending','unrevised','done'].includes(r.hwRevision)))throw Error('作业订正状态无效');
+      if(['pending','unrevised','done'].includes(r.hwRevision)&&!(r.status==='done'||r.status==='missing'&&r.submitted))throw Error('待改或已改的作业必须已交');
       if(r.revisedDate!==undefined&&(typeof r.revisedDate!=='string'||r.revisedDate&&!/^\d{4}-\d{2}-\d{2}$/.test(r.revisedDate)))throw Error('作业已改日期无效');
     }
     if(d.activities.some(a=>a.studentIds.some(s=>!pairs.has(a.id+'|'+s))))throw Error('备份缺少学生记录');
@@ -204,8 +206,8 @@
     if(type==='sectionBottom3'&&a.kind==='quiz')return rows.filter(r=>contentScore(a,r,section)!==null).sort((x,y)=>contentScore(a,x,section)-contentScore(a,y,section)||compare(x,y)).slice(0,3);
     if(type==='bottom5'&&a.kind==='quiz')return rows.filter(r=>r.status==='score'&&Number.isFinite(r.score)).sort((x,y)=>x.score-y.score||compare(x,y)).slice(0,5);
     return rows.filter(r=>{
-      if(a.kind==='dict')return type==='failed'?r.status==='f':type==='retake'?r.status==='f'&&r.retake!=='passed':type==='correction'?dictParticipated(r)&&r.correction!=='correct':false;
-      if(a.kind==='hw')return type==='unsubmitted'?r.status==='missing'&&!r.submitted:['revision_pending','revised'].includes(type)&&homeworkState(r)===type;
+      if(a.kind==='dict')return type==='failed'?r.status==='f':type==='retake'?r.status==='f'&&r.retake!=='passed':type==='not_arrived'?r.status==='f'&&r.retake==='not_arrived':type==='correction'?dictParticipated(r)&&r.correction!=='correct':false;
+      if(a.kind==='hw')return type==='unsubmitted'?r.status==='missing'&&!r.submitted:['revision_pending','revision_unrevised','revised'].includes(type)&&homeworkState(r)===type;
       return false;
     }).sort(compare);
   }

@@ -8,7 +8,7 @@ function activityBrowser() {
 }
 function activityCounts(a,rows=data.records.filter(r=>r.activityId===a.id)) {
   if(a.kind==='dict')return {primary:rows.filter(r=>r.status==='f'&&r.retake!=='passed').length,secondary:rows.filter(r=>T.dictParticipated(r)&&r.correction!=='correct').length};
-  if(a.kind==='hw')return {primary:rows.filter(r=>r.status==='missing'&&!r.submitted).length,secondary:rows.filter(r=>T.homeworkState(r)==='revision_pending').length};
+  if(a.kind==='hw')return {primary:rows.filter(r=>r.status==='missing'&&!r.submitted).length,secondary:rows.filter(r=>['revision_pending','revision_unrevised'].includes(T.homeworkState(r))).length};
   return {primary:rows.filter(r=>r.status==='blank').length,secondary:rows.filter(r=>r.status==='score').length};
 }
 function activityListView() {
@@ -36,9 +36,9 @@ function changeActivityListFilter(el) {
   state[key]=el.value;state.page=1;render();return true;
 }
 
-const copyLabels={failed:'首次默写未通过',retake:'待重默',correction:'本次订正待处理',unsubmitted:'作业未完成',revision_pending:'作业待改',revised:'作业已改',bottom5:'小测班级最后 5 名',filtered:'当前筛选名单'};
+const copyLabels={failed:'首次默写未通过',retake:'待重默',not_arrived:'未来重默',correction:'本次订正待处理',unsubmitted:'作业未完成',revision_pending:'作业待改',revision_unrevised:'未改作业',revised:'作业已改',bottom5:'小测班级最后 5 名',filtered:'当前筛选名单'};
 function copyTools(a) {
-  const choices=a.kind==='dict'?[['failed','复制未通过'],['retake','复制待重默'],['correction','复制订正待处理']]:a.kind==='hw'?[['unsubmitted','复制未完成'],['revision_pending','复制待改'],['revised','复制已改']]:[['bottom5','复制班级最后 5 名']];
+  const choices=a.kind==='dict'?[['failed','复制未通过'],['retake','复制待重默'],['not_arrived','复制未来重默'],['correction','复制订正待处理']]:a.kind==='hw'?[['unsubmitted','复制未完成'],['revision_pending','复制待改'],['revision_unrevised','复制未改作业'],['revised','复制已改']]:[['bottom5','复制班级最后 5 名']];
   return `<div class="copy-toolbar"><span class="help">一键复制名单</span>${choices.map(([type,label])=>btn(label,'copy-list',`data-id="${a.id}" data-type="${type}"`,'small')).join('')}${btn('复制当前筛选','copy-list',`data-id="${a.id}" data-type="filtered"`,'small')}<span class="help">${a.kind==='quiz'?'最后 5 名按本场全班有效成绩选取；同分按学号、姓名取足 5 人，不足则复制全部。':'快捷名单按本场全班记录生成；“当前筛选”按表格显示结果生成。'}</span></div>`;
 }
 async function copyActivityList(a,type) {
